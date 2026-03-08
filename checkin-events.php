@@ -2,7 +2,7 @@
 /**
  * Plugin Name: CheckIN Events
  * Description: Displays CheckIN events as a custom post type. Add events by ID or import all events from your CheckIN customer account.
- * Version: 0.0.6
+ * Version: 0.0.8
  * Author: Norsk Interaktiv AS, Martin Morfjord
  */
 
@@ -562,11 +562,14 @@ add_action( 'edit_form_top', function ( $post ) {
 
         <?php if ( $event_id ) : ?>
         <div style="margin-top:12px; padding:10px 12px; background:#f0f6fc; border-radius:3px; border-left:4px solid #72aee6;">
-            <p style="margin:0 0 4px; font-size:12px; font-weight:600;">Shortcodes:</p>
-            <code style="display:block; font-size:11px; margin-bottom:2px; user-select:all;">[checkin_event id="<?php echo esc_html( $event_id ); ?>"]</code>
+            <p style="margin:0 0 4px; font-size:12px; font-weight:600;">Shortcodes (brukes på denne posten — henter data automatisk):</p>
+            <code style="display:block; font-size:11px; margin-bottom:2px; user-select:all;">[checkin_event]</code>
             <code style="display:block; font-size:11px; margin-bottom:2px; user-select:all;">[checkin_description]</code>
             <code style="display:block; font-size:11px; margin-bottom:2px; user-select:all;">[checkin_start_date]</code>
-            <code style="display:block; font-size:11px; user-select:all;">[checkin_end_date]</code>
+            <code style="display:block; font-size:11px; margin-bottom:6px; user-select:all;">[checkin_end_date]</code>
+            <p style="margin:0 0 2px; font-size:12px; font-weight:600;">Med eksplisitt ID (for bruk andre steder):</p>
+            <code style="display:block; font-size:11px; margin-bottom:2px; user-select:all;">[checkin_event id="<?php echo esc_html( $event_id ); ?>"]</code>
+            <code style="display:block; font-size:11px; margin-bottom:2px; user-select:all;">[checkin_start_date id="<?php echo esc_html( $event_id ); ?>" format="d. F Y \k\l. H:i"]</code>
         </div>
         <?php endif; ?>
     </div>
@@ -716,15 +719,37 @@ function checkin_get_event_data( $event_id ) {
     return $data;
 }
 
+// ─── Context post ID resolver ─────────────────────────────────────────────────
+// Returns the most relevant post ID for the current rendering context.
+// Works in the main loop, outside the loop, and in Beaver Builder Themer
+// singular templates where get_the_ID() may return the template post ID.
+
+function checkin_get_context_post_id( $provided_id = 0 ) {
+    if ( $provided_id ) {
+        return (int) $provided_id;
+    }
+
+    $pid = get_the_ID();
+    if ( $pid ) {
+        return (int) $pid;
+    }
+
+    // Fallback for contexts outside the loop (e.g. widget areas in BB Themer)
+    return (int) get_queried_object_id();
+}
+
 // ─── Shortcodes ───────────────────────────────────────────────────────────────
-// All shortcodes accept id="CHECKIN_EVENT_ID" to fetch data directly from API.
-// Without id, they fall back to the current post's stored meta.
+// Without id, shortcodes resolve data from the current post automatically.
+// This makes them work in Beaver Builder Themer singular post templates.
 //
-// [checkin_event id="123103"]
-// [checkin_event id="123103" show="description,dates,embed"]
-// [checkin_description id="123103"]
-// [checkin_start_date id="123103" format="d. F Y \k\l. H:i"]
-// [checkin_end_date   id="123103" format="d. F Y \k\l. H:i"]
+// [checkin_event]                              — embed for the current post
+// [checkin_event show="description,dates,embed"]
+// [checkin_event id="123103"]                  — explicit event ID
+// [checkin_description]
+// [checkin_start_date]
+// [checkin_start_date format="d. F Y \k\l. H:i"]
+// [checkin_end_date]
+// [checkin_end_date format="d. F Y \k\l. H:i"]
 
 add_shortcode( 'checkin_event', function ( $atts ) {
     $atts = shortcode_atts( [
@@ -732,7 +757,11 @@ add_shortcode( 'checkin_event', function ( $atts ) {
         'show' => 'embed', // comma-separated: description, dates, embed
     ], $atts, 'checkin_event' );
 
+    // Resolve event ID: explicit attribute → current post meta
     $event_id = $atts['id'];
+    if ( ! $event_id ) {
+        $event_id = get_post_meta( checkin_get_context_post_id(), '_checkin_event_id', true );
+    }
     if ( ! $event_id ) return '';
 
     $show   = array_map( 'trim', explode( ',', $atts['show'] ) );
@@ -767,7 +796,7 @@ add_shortcode( 'checkin_description', function ( $atts ) {
         $data = checkin_get_event_data( $atts['id'] );
         $desc = $data['description'] ?? '';
     } else {
-        $pid  = $atts['post_id'] ? (int) $atts['post_id'] : get_the_ID();
+        $pid  = checkin_get_context_post_id( $atts['post_id'] );
         $desc = get_post_meta( $pid, '_checkin_description', true );
         if ( ! $desc ) {
             $event_id = get_post_meta( $pid, '_checkin_event_id', true );
@@ -788,7 +817,7 @@ add_shortcode( 'checkin_start_date', function ( $atts ) {
         $data  = checkin_get_event_data( $atts['id'] );
         $value = $data['start_date'] ?? '';
     } else {
-        $pid   = $atts['post_id'] ? (int) $atts['post_id'] : get_the_ID();
+        $pid   = checkin_get_context_post_id( $atts['post_id'] );
         $value = get_post_meta( $pid, '_checkin_start_date', true );
         if ( ! $value ) {
             $event_id = get_post_meta( $pid, '_checkin_event_id', true );
@@ -809,7 +838,7 @@ add_shortcode( 'checkin_end_date', function ( $atts ) {
         $data  = checkin_get_event_data( $atts['id'] );
         $value = $data['end_date'] ?? '';
     } else {
-        $pid   = $atts['post_id'] ? (int) $atts['post_id'] : get_the_ID();
+        $pid   = checkin_get_context_post_id( $atts['post_id'] );
         $value = get_post_meta( $pid, '_checkin_end_date', true );
         if ( ! $value ) {
             $event_id = get_post_meta( $pid, '_checkin_event_id', true );
@@ -889,29 +918,32 @@ add_action( 'fl_page_data_add_properties', function () {
     ] );
 } );
 
-function checkin_bb_get_event_id( $settings ) {
-    return get_post_meta( get_the_ID(), '_checkin_event_id', true );
+// BB Themer calls getters with ( $settings, $post_id ) — always use $post_id
+// when available so the getter works correctly in the Themer editor preview.
+
+function checkin_bb_get_event_id( $settings, $post_id = 0 ) {
+    return get_post_meta( checkin_get_context_post_id( $post_id ), '_checkin_event_id', true );
 }
 
-function checkin_bb_get_embed_html( $settings ) {
-    $event_id = get_post_meta( get_the_ID(), '_checkin_event_id', true );
+function checkin_bb_get_embed_html( $settings, $post_id = 0 ) {
+    $event_id = get_post_meta( checkin_get_context_post_id( $post_id ), '_checkin_event_id', true );
     return $event_id ? checkin_embed_html( $event_id ) : '';
 }
 
-function checkin_bb_get_description( $settings ) {
-    $event_id = get_post_meta( get_the_ID(), '_checkin_event_id', true );
+function checkin_bb_get_description( $settings, $post_id = 0 ) {
+    $event_id = get_post_meta( checkin_get_context_post_id( $post_id ), '_checkin_event_id', true );
     $data     = checkin_get_event_data( $event_id );
     return $data['description'] ?? '';
 }
 
-function checkin_bb_get_start_date( $settings ) {
-    $event_id = get_post_meta( get_the_ID(), '_checkin_event_id', true );
+function checkin_bb_get_start_date( $settings, $post_id = 0 ) {
+    $event_id = get_post_meta( checkin_get_context_post_id( $post_id ), '_checkin_event_id', true );
     $data     = checkin_get_event_data( $event_id );
     return checkin_format_date( $data['start_date'] ?? '' );
 }
 
-function checkin_bb_get_end_date( $settings ) {
-    $event_id = get_post_meta( get_the_ID(), '_checkin_event_id', true );
+function checkin_bb_get_end_date( $settings, $post_id = 0 ) {
+    $event_id = get_post_meta( checkin_get_context_post_id( $post_id ), '_checkin_event_id', true );
     $data     = checkin_get_event_data( $event_id );
     return checkin_format_date( $data['end_date'] ?? '' );
 }
